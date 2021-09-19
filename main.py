@@ -182,6 +182,9 @@ def test_models(df):
     
     rown = put_consol(txt_con, rown, f'Mean squared error: {mean_squared_error(y_test, forecasts):.3f}')
     rown = put_consol(txt_con, rown, f'SMAPE: {smape(y_test, forecasts):.3f}')
+    rown = put_consol(txt_con, rown, f"Минимум: {min(df['Close']):.3f} "
+                                     f"Максимум: {max(df['Close']):.3f} " 
+                                     f"Разница: {max(df['Close'])-min(df['Close']):.3f}")
 
     df_new['P_sma_4'] = sma(df_new['Predict'], 4)
     df_new['P_sma_10'] = sma(df_new['Predict'], 10)
