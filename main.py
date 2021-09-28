@@ -17,6 +17,11 @@ from pmdarima.metrics import smape
 import numpy as np
 from ta import volatility as vlt
 from ta import add_volatility_ta
+from ta import add_trend_ta
+from ta import momentum as mm
+import warnings
+
+warnings.filterwarnings('ignore')
 
 # Переменные
 train_data = []
@@ -109,8 +114,10 @@ def analize():
                            group_by = 'ticker')
         data['ticker'] = curr
         data = add_volatility_ta(data, high = 'High', low = 'Low', close = 'Close', fillna=False)
+        data = add_trend_ta(data, high = 'High', low = 'Low', close = 'Close', fillna=False)
         data['ATRp'] = data['volatility_atr']/data['Close']*100
         data['BB_wprc'] = (data['volatility_bbh']-data['volatility_bbl'])/data['Close']*100
+        data['RSI'] = mm.RSIIndicator(close = data['Close'], window = 14, fillna=False).rsi()
         
         df_list.append(data)         
         df = pd.concat(df_list)
@@ -134,6 +141,11 @@ def analize():
         rown = put_consol(txt_con, rown, f'      Среднее за 7 дней: {df.loc[mask(df, curr, 7), "ATRp"].mean():.3f}')
         rown = put_consol(txt_con, rown, f'      Текущее: {df.loc[mask(df, curr, 0), "ATRp"].mean():.3f}')
         
+        rown = put_consol(txt_con, rown, f'   Relative Strength Index (RSI), %')
+        rown = put_consol(txt_con, rown, f'      Среднее за 30 дней: {df.loc[mask(df, curr, 30), "RSI"].mean():.3f}')
+        rown = put_consol(txt_con, rown, f'      Среднее за 7 дней: {df.loc[mask(df, curr, 7), "RSI"].mean():.3f}')
+        rown = put_consol(txt_con, rown, f'      Текущее: {df.loc[mask(df, curr, 0), "RSI"].mean():.3f}')
+        
         rown = put_consol(txt_con, rown, f'   Bollinger Bands (BB), SMA')
         rown = put_consol(txt_con, rown, f'      Среднее за 30 дней: {df.loc[mask(df, curr, 30), "volatility_bbm"].mean():.3f}')
         rown = put_consol(txt_con, rown, f'      Среднее за 7 дней: {df.loc[mask(df, curr, 7), "volatility_bbm"].mean():.3f}')
@@ -145,6 +157,11 @@ def analize():
         rown = put_consol(txt_con, rown, f'      Среднее за 7 дней: {df.loc[mask(df, curr, 7), "BB_wprc"].mean():.3f}')
         rown = put_consol(txt_con, rown, f'      Текущее: {df.loc[mask(df, curr, 0), "BB_wprc"].mean():.3f}')
         
+        rown = put_consol(txt_con, rown, f'   Commodity Channel Index [-100, 100]')
+        rown = put_consol(txt_con, rown, f'      Среднее за 30 дней: {df.loc[mask(df, curr, 30), "trend_cci"].mean():.2f}')
+        rown = put_consol(txt_con, rown, f'      Среднее за 7 дней: {df.loc[mask(df, curr, 7), "trend_cci"].mean():.2f}')
+        rown = put_consol(txt_con, rown, f'      Текущее: {df.loc[mask(df, curr, 0), "trend_cci"].mean():.2f}')
+        
         i = i+ 1
         pb_load['value'] = i
         wnd.update_idletasks()
@@ -152,9 +169,10 @@ def analize():
     df = df.rename(columns={'volatility_atr': 'ATR', 
                             'volatility_bbl': 'BB_low', 
                             'volatility_bbm': 'BB_mid', 
-                            'volatility_bbh': 'BB_high'})
+                            'volatility_bbh': 'BB_high',
+                            'trend_cci'     : 'CCI_trend'})
     df = df[['Open', 'High', 'Low', 'Close', 'Volume', 'ticker', 
-             'ATR', 'ATRp', 'BB_low', 'BB_mid', 'BB_high', 'BB_wprc']].copy()
+             'ATR', 'ATRp', 'BB_low', 'BB_mid', 'BB_high', 'BB_wprc', 'CCI_trend', 'RSI']].copy()
     
     df.to_csv(os.path.join(loc, 'analize_tick.csv'), sep=';')
 
@@ -173,9 +191,20 @@ def __bYload():
     df.to_csv(os.path.join(loc, 'ticker.csv'), sep=';')
     
     df = read_csv(data_loc('ticker.csv'), sep= ';')
+    
     txt_con.delete("1.0","end")
-    train_data, test_data, y_train, y_test = test_models(df)
-
+    rown = 1.0
+    
+    # Алгоритм SMA_4_10
+    test_data, y_test, rown = simulate_SMA(df, rown, 4, 10)
+    rown = put_consol(txt_con, rown, '')
+    
+    # Алгоритм SMA_20_50
+    test_data, y_test, rown = simulate_SMA(df, rown, 20, 50)
+    
+    # Алгоритму Martingale
+    rown = simulate_MG(df, rown)
+    
 # Путь к файлу котировок
 def data_loc(ticker):
     return os.path.join(os.path.join(os.getcwd(), os.path.dirname(__file__)), ticker)
@@ -192,12 +221,12 @@ def put_consol(txt_con, rown, text):
     
 # Нарисуем график
 def mplot():
-    global train_data, test_data, y_train, y_test
+    global test_data, y_test
     
-    if len(train_data) == 0:
+    if len(test_data) == 0:
         return 0
     
-    plt.plot(train_data.index, y_train, color='blue', label='Тренировочный набор 80%')
+    #plt.plot(train_data.index, y_train, color='blue', label='Тренировочный набор 80%')
     plt.plot(test_data.index, y_test, color='red', label='Актуальная цена')
     plt.title(f'Валюта: {cmb_pairs.get()}')
     plt.legend()
@@ -212,23 +241,67 @@ def buy_val(pClose, price):
 # За сколько продали    
 def sell_val(pClose, cty):
     return cty * pClose
-    
-# Построение тренирочного и тестового набора    
-def test_models(df):
-    global txt_con
-    rown = 1.0
-    
-    train_len = int(len(df) * 0.80)
-    train_data, test_data = df[:train_len].copy(), df[train_len:].copy()
-    test_data['sma_4'] = sma(test_data['Close'], 4)
-    test_data['sma_10'] = sma(test_data['Close'], 10)
 
-    y_train = train_data['Close'].values
+# Формирование сетки ордеров
+def orders_calc(close, count, prc, price, mg):
+    order_list = []
+    
+    for i in range(count):
+        order = close - (close * (prc*(i+1)/100))
+        amount = price + (price * (mg*i/100))
+        order_list.append((order, amount))
+        
+    #print(close, order_list[0][0], order_list[0][1])
+    return order_list
+
+# Симуляция по алгоритму Martingale. Вход по осциллятору 40 < RSI < 70, направление LONG 
+def simulate_MG(df, rown):
+    df_new = df[['Datetime', 'Close']].copy()
+    #df_new.set_index('Datetime')
+    df_new['RSI'] = mm.RSIIndicator(close = df_new['Close'], window = 14, fillna=False).rsi()
+    
+    order_list = []
+    rown = 1.0
+    for i in test_data.index:
+        # определим точку входа и сформируем сетку ордеров
+        if df_new.loc[i, 'RSI'] > 40 and df_new.loc[i, 'RSI'] < 70 and len(order_list) == 0:
+            order_list = orders_calc(df_new.loc[i, 'Close'], 
+                                     int(cmb_count.get()), 
+                                     float(cmb_step.get()),
+                                     float(entr_price.get()),
+                                     int(cmb_mart.get()))
+            
+            txt_ord.tag_config('curr', font=("Verdana", 9, 'bold'))
+            rown = put_consol(txt_ord, rown, f'CurrPrice = {df_new.loc[i, "Close"]:.3f}')
+            txt_ord.tag_add('curr', rown-1, f'{int(rown-1)}.end')
+            for j in range(len(order_list)):
+                rown = put_consol(txt_ord, rown, f'  {j+1}: {order_list[j][0]:.3f} x {order_list[j][1]:.3f}')
+        
+        # последовательно реализуем ордера
+        
+    
+    df_new.to_csv(data_loc('ticker_MG.csv'), sep= ';', index=False)
+    
+    #print(df_new.index.values)    
+    return rown
+    
+# Симуляция по алгоритму простого скользящего среднего (SMA_4_10, SMA_20_50)    
+def simulate_SMA(df, rown, __low, __high):
+    global txt_con
+    
+    #train_len = int(len(df) * 0.80)
+    #train_data, test_data = df[:train_len].copy(), df[train_len:].copy()
+    #test_data['sma_4'] = sma(test_data['Close'], 4)
+    #test_data['sma_10'] = sma(test_data['Close'], 10)
+    #y_train = train_data['Close'].values
+    #y_test = test_data['Close'].values
+    
+    test_data = df.copy()
+    test_data[f'sma_{__low}'] = sma(test_data['Close'], __low)
+    test_data[f'sma_{__high}'] = sma(test_data['Close'], __high)
     y_test = test_data['Close'].values
+    df_new = test_data[['Datetime', f'sma_{__low}', f'sma_{__high}', 'Close']].copy()
     
-    df_new = test_data[['Datetime', 'sma_4', 'sma_10', 'Close']].copy()
-    
-    # Торговая стратегия SMA_4_10 - Просто алготрейдинг, не предсказываем
     signal = 0
     buy_sum = 0
     sell_sum = 0
@@ -238,10 +311,13 @@ def test_models(df):
     df_new['Buy_price_SMA'] = 0
     df_new['Sell_price_SMA'] = 0
     
-    rown = put_consol(txt_con, rown, f'Результат тестового набора по стратегии SMA_4_10:')
+    txt_con.tag_config('curr', font=("Verdana", 9, 'bold'))
+    rown = put_consol(txt_con, rown, f'{cmb_pairs.get()}')
+    txt_con.tag_add('curr', rown-1, f'{int(rown-1)}.end')
+    rown = put_consol(txt_con, rown, f'Результат тестового набора по стратегии SMA_{__low}_{__high}:')
     
     for i in test_data.index:
-        if df_new.loc[i, 'sma_4'] > df_new.loc[i, 'sma_10']:
+        if df_new.loc[i, f'sma_{__low}'] > df_new.loc[i, f'sma_{__high}']:
             if signal != 1:
                 if len(buy_price) <= len(sell_price):
                     #price = df_new.loc[i, 'Close']
@@ -259,7 +335,7 @@ def test_models(df):
                 df_new.loc[i, 'Buy_price_SMA'] = np.nan
                 df_new.loc[i, 'Sell_price_SMA'] = np.nan
                 df_new.loc[i, 'Signal_SMA'] = 0
-        elif df_new.loc[i, 'sma_10'] > df_new.loc[i, 'sma_4']:
+        elif df_new.loc[i, f'sma_{__high}'] > df_new.loc[i, f'sma_{__low}']:
             if signal != -1:
                 if len(buy_price) > len(sell_price):
                     #price = df_new.loc[i, 'Close']
@@ -292,18 +368,18 @@ def test_models(df):
         sell_price.append(sell_sum)
         signal = 0
 
-    df_new.to_csv(data_loc('ticker_sma.csv'), sep= ';')
+    df_new.to_csv(data_loc(f'ticker_sma{__low}_{__high}.csv'), sep= ';')
     
-    rown = put_consol(txt_con, rown, f'    Покупок: {len(buy_price)} Продаж: {len(sell_price)}')
-    rown = put_consol(txt_con, rown, f'    Сумма покупок: {sum(buy_price):.3f} Сумма продаж: {sum(sell_price):.3f}')
-    rown = put_consol(txt_con, rown, f'    Результат: {sum(sell_price) - sum(buy_price):.3f}')
+    rown = put_consol(txt_con, rown, f'Покупок: {len(buy_price)} Продаж: {len(sell_price)}')
+    rown = put_consol(txt_con, rown, f'Сумма покупок: {sum(buy_price):.3f} Сумма продаж: {sum(sell_price):.3f}')
+    rown = put_consol(txt_con, rown, f'Результат: {sum(sell_price) - sum(buy_price):.3f}')
     #rown = put_consol(txt_con, rown, f'{__price.get()}')
     
-    return train_data, test_data, y_train, y_test
+    return test_data, y_test, rown
 
 # Инициализация окна
 wnd = tk.Tk()
-wnd.geometry('800x600')
+wnd.geometry('815x650')
 
 loc = os.path.realpath(os.path.join(os.getcwd(), 
                        os.path.dirname(__file__)))
@@ -393,26 +469,61 @@ cmb_int = ttk.Combobox(frm_par, values=l_int, state='readonly')
 cmb_int.grid(row=0, column=5, sticky=W, pady=4, padx=5)
 cmb_int.current(0)
 
-lbl_sum = tk.Label(frm_par, text='Шаг покупки, $:')
-lbl_sum.grid(row=2, column=0, sticky=E, pady=4, padx=5)
-__price = tk.IntVar()
-__price.set(500)
-entr_sum = tk.Entry(frm_par, textvariable=__price)
-entr_sum.grid(row=2, column=1, sticky=W, pady=4, padx=5)
-
 lbl_sma = tk.Label(frm_par, text='Алгоритм:')
-lbl_sma.grid(row=2, column=2, sticky=E, pady=4, padx=5)
+lbl_sma.grid(row=2, column=0, sticky=E, pady=4, padx=5)
 __alg = ['Martingale LONG', 'SMA_4_10', 'SMA_20_50']
 cmb_sma = ttk.Combobox(frm_par, values=__alg, state='readonly')
-cmb_sma.grid(row=2, column=3, sticky=W, pady=4, padx=5)
+cmb_sma.grid(row=2, column=1, sticky=W, pady=4, padx=5)
 cmb_sma.current(0)
 
+lbl_price = tk.Label(frm_par, text='1й ордер, $:')
+lbl_price.grid(row=2, column=2, sticky=E, pady=4, padx=5)
+__price = tk.IntVar()
+__price.set(100)
+entr_price = tk.Entry(frm_par, textvariable=__price)
+entr_price.grid(row=2, column=3, sticky=W, pady=4, padx=5)
+
+lbl_step = tk.Label(frm_par, text='Отступ ордера, %:')
+lbl_step.grid(row=2, column=4, sticky=E, pady=4, padx=5)
+__step = [0.5, 1, 2, 3, 4, 5]
+cmb_step = ttk.Combobox(frm_par, values=__step, state='readonly')
+cmb_step.grid(row=2, column=5, sticky=W, pady=4, padx=5)
+cmb_step.current(0)
+
+lbl_count = tk.Label(frm_par, text='Количество ордеров:')
+lbl_count.grid(row=3, column=0, sticky=E, pady=4, padx=5)
+__count = [5, 7, 10, 15, 20]
+cmb_count = ttk.Combobox(frm_par, values=__count, state='readonly')
+cmb_count.grid(row=3, column=1, sticky=W, pady=4, padx=5)
+cmb_count.current(2)
+
+lbl_mart = tk.Label(frm_par, text='Matringale, %:')
+lbl_mart.grid(row=3, column=2, sticky=E, pady=4, padx=5)
+__mart = [5, 7, 10, 15]
+cmb_mart = ttk.Combobox(frm_par, values=__mart, state='readonly')
+cmb_mart.grid(row=3, column=3, sticky=W, pady=4, padx=5)
+cmb_mart.current(3)
+
+lbl_prof = tk.Label(frm_par, text='TakeProfit, %:')
+lbl_prof.grid(row=3, column=4, sticky=E, pady=4, padx=5)
+__prof = [0.7, 1, 2, 3]
+cmb_prof = ttk.Combobox(frm_par, values=__prof, state='readonly')
+cmb_prof.grid(row=3, column=5, sticky=W, pady=4, padx=5)
+cmb_prof.current(1)
+
+lbl_stop = tk.Label(frm_par, text='StopLoss, %:')
+lbl_stop.grid(row=4, column=0, sticky=E, pady=4, padx=5)
+__stop = [3, 5, 7, 10]
+cmb_stop = ttk.Combobox(frm_par, values=__stop, state='readonly')
+cmb_stop.grid(row=4, column=1, sticky=W, pady=4, padx=5)
+cmb_stop.current(1)
+
 btn_analize = tk.Button(frm_par, text ="Анализ", height = 1, width = 10, command = lambda: analize())
-btn_analize.grid(row=3, column=0, sticky=W, pady=4, padx=5)
+btn_analize.grid(row=5, column=0, sticky=W, pady=4, padx=5)
 btn_yload = tk.Button(frm_par, text ="Симуляция", height = 1, width = 10, command = lambda: __bYload())
-btn_yload.grid(row=3, column=1, sticky=W, pady=4, padx=5)
+btn_yload.grid(row=5, column=1, sticky=W, pady=4, padx=5)
 btn_graf = tk.Button(frm_par, text ="График", height = 1, width = 10, command = lambda: mplot())
-btn_graf.grid(row=3, column=2, sticky=W, pady=4)
+btn_graf.grid(row=5, column=2, sticky=W, pady=4)
 
 # Консольный вывод
 pb_load = ttk.Progressbar(wnd, orient = tk.HORIZONTAL, length = len_pb, mode = 'determinate')
