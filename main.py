@@ -176,35 +176,6 @@ def analize():
     
     df.to_csv(os.path.join(loc, 'analize_tick.csv'), sep=';')
 
-# загрузка котировок        
-def __bYload(): 
-    global train_data, test_data, y_train, y_test
-    df_list = []
-    data = yf.download(tickers = cmb_pairs.get(), 
-                       period = cmb_per.get(), 
-                       interval = cmb_int.get(), 
-                       group_by = 'ticker')
-                           
-    data['ticker'] = cmb_pairs.get()
-    df_list.append(data)         
-    df = pd.concat(df_list)    
-    df.to_csv(os.path.join(loc, 'ticker.csv'), sep=';')
-    
-    df = read_csv(data_loc('ticker.csv'), sep= ';')
-    
-    txt_con.delete("1.0","end")
-    rown = 1.0
-    
-    # Алгоритм SMA_4_10
-    test_data, y_test, rown = simulate_SMA(df, rown, 4, 10)
-    rown = put_consol(txt_con, rown, '')
-    
-    # Алгоритм SMA_20_50
-    test_data, y_test, rown = simulate_SMA(df, rown, 20, 50)
-    
-    # Алгоритму Martingale
-    rown = simulate_MG(df, rown)
-    
 # Путь к файлу котировок
 def data_loc(ticker):
     return os.path.join(os.path.join(os.getcwd(), os.path.dirname(__file__)), ticker)
@@ -254,6 +225,35 @@ def orders_calc(close, count, prc, price, mg):
     #print(close, order_list[0][0], order_list[0][1])
     return order_list
 
+# загрузка котировок        
+def __bYload(): 
+    global train_data, test_data, y_train, y_test
+    df_list = []
+    data = yf.download(tickers = cmb_pairs.get(), 
+                       period = cmb_per.get(), 
+                       interval = cmb_int.get(), 
+                       group_by = 'ticker')
+                           
+    data['ticker'] = cmb_pairs.get()
+    df_list.append(data)         
+    df = pd.concat(df_list)    
+    df.to_csv(os.path.join(loc, 'ticker.csv'), sep=';')
+    
+    df = read_csv(data_loc('ticker.csv'), sep= ';')
+    
+    txt_con.delete("1.0","end")
+    rown = 1.0
+    
+    # Алгоритм Martingale
+    rown = simulate_MG(df, rown)
+    
+    # Алгоритм SMA_4_10
+    test_data, y_test, rown = simulate_SMA(df, rown, 4, 10)
+    rown = put_consol(txt_con, rown, '')
+    
+    # Алгоритм SMA_20_50
+    test_data, y_test, rown = simulate_SMA(df, rown, 20, 50)
+
 # Симуляция по алгоритму Martingale. Вход по осциллятору 40 < RSI < 70, направление LONG 
 def simulate_MG(df, rown):
     df_new = df[['Datetime', 'Close']].copy()
@@ -261,24 +261,92 @@ def simulate_MG(df, rown):
     df_new['RSI'] = mm.RSIIndicator(close = df_new['Close'], window = 14, fillna=False).rsi()
     
     order_list = []
-    rown = 1.0
-    for i in test_data.index:
+    amount_list = []
+    buy_list = []
+    total_sell = []
+    total_buy = []
+    cycle_n = 0
+    order_n = 0
+    txt_ord.delete("1.0","end")
+    rown1 = 1.0
+    
+    txt_con.tag_config('curr', font=("Verdana", 9, 'bold'))
+    rown = put_consol(txt_con, rown, f'{cmb_pairs.get()}')
+    txt_con.tag_add('curr', rown-1, f'{int(rown-1)}.end')
+    rown = put_consol(txt_con, rown, f'Результат тестового набора по стратегии Martingale:')
+    
+    for i in df_new.index:
         # определим точку входа и сформируем сетку ордеров
-        if df_new.loc[i, 'RSI'] > 40 and df_new.loc[i, 'RSI'] < 70 and len(order_list) == 0:
+        if (df_new.loc[i, 'RSI'] > 40 and 
+            df_new.loc[i, 'RSI'] < 70 and 
+            len(order_list) == 0 and
+            len(amount_list) == 0):
             order_list = orders_calc(df_new.loc[i, 'Close'], 
                                      int(cmb_count.get()), 
                                      float(cmb_step.get()),
                                      float(entr_price.get()),
                                      int(cmb_mart.get()))
             
+            cycle_n = cycle_n + 1
             txt_ord.tag_config('curr', font=("Verdana", 9, 'bold'))
-            rown = put_consol(txt_ord, rown, f'CurrPrice = {df_new.loc[i, "Close"]:.3f}')
-            txt_ord.tag_add('curr', rown-1, f'{int(rown-1)}.end')
+            rown1 = put_consol(txt_ord, rown1, f'CurrPrice = {df_new.loc[i, "Close"]:.3f}')
+            txt_ord.tag_add('curr', rown1-1, f'{int(rown1-1)}.end')
+            
+            rown = put_consol(txt_con, rown, f'# цикла: {cycle_n}')
+            
             for j in range(len(order_list)):
-                rown = put_consol(txt_ord, rown, f'  {j+1}: {order_list[j][0]:.3f} x {order_list[j][1]:.3f}')
+                rown1 = put_consol(txt_ord, rown1, f'  {j+1}: {order_list[j][0]:.3f} x {order_list[j][1]:.3f}')
         
         # последовательно реализуем ордера
+        if len(order_list) > 0:
+            if df_new.loc[i, 'Close'] <= order_list[0][0]:
+                order_n = order_n + 1
+                rown = put_consol(txt_con, rown, f'  {order_n}) {order_list[0][0]:.3f} x {order_list[0][1]:.3f}')
+                
+                df_new.loc[i, 'Price'] = order_list[0][1]
+                amount = buy_val(df_new.loc[i, 'Close'], order_list[0][1])
+                df_new.loc[i, 'Amount'] = amount
+                
+                amount_list.append(amount)
+                buy_list.append(order_list[0][1])
+                
+                #print(sum(amount_list), sum(buy_list), sum(buy_list)+(sum(buy_list)*float(cmb_prof.get())/100), sum(amount_list)*df_new.loc[i, 'Close'])
+                order_list.pop(0)
         
+        # зафиксируем профит + завершающий цикл ордер
+        if len(amount_list) > 0 or (len(amount_list) > 0 and len(order_list) == 0):
+            if sum(amount_list)*df_new.loc[i, 'Close'] >= sum(buy_list) + (sum(buy_list)*float(cmb_prof.get())/100):
+                sell_price = sum(amount_list)*df_new.loc[i, 'Close']
+                df_new.loc[i, 'Profit'] = sell_price
+                rown = put_consol(txt_con, rown, f'Покупка: {sum(buy_list):.3f}'
+                                                 f' Продажа: {sell_price:.3f}'
+                                                 f' Профит: {sell_price - sum(buy_list):.3f}')
+                rown = put_consol(txt_con, rown, f'')
+                
+                total_buy.append(sum(buy_list))
+                total_sell.append(sell_price)
+                
+                order_list = []
+                amount_list = []
+                buy_list = []
+                order_n = 0
+                
+    # Продаем что осталось
+    if len(amount_list) > 0:
+        i = max(df_new.index)
+        sell_price = sum(amount_list)*df_new.loc[i, 'Close']
+        df_new.loc[i, 'Profit'] = sell_price
+        rown = put_consol(txt_con, rown, f'Покупка: {sum(buy_list):.3f}'
+                                         f' Продажа: {sell_price:.3f}'
+                                         f' Профит: {sell_price - sum(buy_list):.3f}')
+        rown = put_consol(txt_con, rown, f'')
+        
+        total_buy.append(sum(buy_list))
+        total_sell.append(sell_price)
+    
+    rown = put_consol(txt_con, rown, f'Сумма покупок: {sum(total_buy):.3f} Сумма продаж: {sum(total_sell):.3f}')
+    rown = put_consol(txt_con, rown, f'Результат: {sum(total_sell) - sum(total_buy):.3f}')
+    rown = put_consol(txt_con, rown, f'')
     
     df_new.to_csv(data_loc('ticker_MG.csv'), sep= ';', index=False)
     
