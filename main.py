@@ -274,10 +274,16 @@ def simulate_MG(df, rown):
     order_n = 0
     last_close = 0
     cap_sum = 0
+    count_buy = 0
+    count_sell = 0
+    trail_stop = 0
     txt_ord.delete("1.0","end")
     rown1 = 1.0
     
     txt_con.tag_config('curr', font=("Verdana", 9, 'bold'))
+    txt_con.tag_config('profit', foreground='green')
+    txt_con.tag_config('loss', foreground='red')
+    
     rown = put_consol(txt_con, rown, f'{cmb_pairs.get()}')
     txt_con.tag_add('curr', rown-1, f'{int(rown-1)}.end')
     rown = put_consol(txt_con, rown, f'Результат тестового набора по стратегии Martingale:')
@@ -309,6 +315,7 @@ def simulate_MG(df, rown):
                 rown1 = put_consol(txt_ord, rown1, f'  {j+1}: {order_list[j][0]:.3f} x {order_list[j][1]:.3f}')
                 cap_sum = cap_sum + order_list[j][1]
             last_close = order_list[len(order_list)-1][0]
+            trail_stop = 0
             
         # последовательно реализуем ордера
         if len(order_list) > 0:
@@ -333,26 +340,40 @@ def simulate_MG(df, rown):
         # зафиксируем профит + завершающий цикл ордер
         if len(amount_list) > 0 or (len(amount_list) > 0 and len(order_list) == 0):
             if sum(amount_list)*df_new.loc[i, 'Close'] >= sum(buy_list) + (sum(buy_list)*float(cmb_prof.get())/100):
-                sell_price = sum(amount_list)*df_new.loc[i, 'Close']
-                df_new.loc[i, 'Profit'] = sell_price
-                rown = put_consol(txt_con, rown, f'Покупка: {sum(buy_list):.3f}'
-                                                 f' Продажа: {sell_price:.3f}'
-                                                 f' Профит: {sell_price - sum(buy_list):.3f}')
-                rown = put_consol(txt_con, rown, f'')
+                if trail_stop == 0 and df_new.loc[i, 'RSI'] < 70 and float(cmb_trail.get()) > 0:
+                    trail_stop = df_new.loc[i, 'Close']
+                    df_new.loc[i, 'Trail'] = 0
+                elif (trail_stop > 0 
+                  and df_new.loc[i, 'Close'] >= trail_stop - (trail_stop*float(cmb_trail.get())/100) 
+                  and float(cmb_trail.get()) > 0):
+                    #print(df_new.loc[i, 'Close'], trail_stop, trail_stop - (trail_stop*float(cmb_trail.get())/100))
+                    trail_stop = df_new.loc[i, 'Close']
+                    df_new.loc[i, 'Trail'] = 1
+                else:
+                    sell_price = sum(amount_list)*df_new.loc[i, 'Close']
+                    df_new.loc[i, 'Profit'] = sell_price
+                    rown = put_consol(txt_con, rown, f'Покупка: {sum(buy_list):.3f}'
+                                                     f' Продажа: {sell_price:.3f}'
+                                                     f' Профит: {sell_price - sum(buy_list):.3f}')
+                    txt_con.tag_add('profit', rown-1, f'{int(rown-1)}.end')
+                    rown = put_consol(txt_con, rown, f'')
                 
-                total_buy.append(sum(buy_list))
-                total_sell.append(sell_price)
+                    total_buy.append(sum(buy_list))
+                    total_sell.append(sell_price)
                 
-                comm = sell_price*float(cmb_comm.get())/100
-                df_new.loc[i, 'Comm'] = comm
-                total_comm.append(comm)
+                    comm = sell_price*float(cmb_comm.get())/100
+                    df_new.loc[i, 'Comm'] = comm
+                    total_comm.append(comm)
                 
-                order_list = []
-                amount_list = []
-                buy_list = []
-                order_n = 0
-                last_close = 0
-                
+                    count_buy = count_buy + len(amount_list)
+                    count_sell = count_sell + 1
+                    order_list = []
+                    amount_list = []
+                    buy_list = []
+                    order_n = 0
+                    last_close = 0
+                    trail_stop = 0
+        
         # Выход из цикла, если сработал stop loss после реализации последнего ордера
         if len(amount_list) > 0 and len(order_list) == 0:
             if df_new.loc[i, 'Close'] < last_close - (last_close*float(cmb_stop.get())/100):
@@ -361,6 +382,7 @@ def simulate_MG(df, rown):
                 rown = put_consol(txt_con, rown, f'Покупка: {sum(buy_list):.3f}'
                                                  f' Продажа: {sell_price:.3f}'
                                                  f' Потеря: {sell_price - sum(buy_list):.3f}')
+                txt_con.tag_add('loss', rown-1, f'{int(rown-1)}.end')
                 rown = put_consol(txt_con, rown, f'')
                 
                 total_buy.append(sum(buy_list))
@@ -370,11 +392,38 @@ def simulate_MG(df, rown):
                 df_new.loc[i, 'Comm'] = comm
                 total_comm.append(comm)
                 
+                count_buy = count_buy + len(amount_list)
+                count_sell = count_sell + 1
                 order_list = []
                 amount_list = []
                 buy_list = []
                 order_n = 0
                 last_close = 0
+                
+        # Выход из цикла по аномально низкому RSI (< 30)
+        """if len(amount_list) > 6 and df_new.loc[i, 'RSI'] < 30:
+            sell_price = sum(amount_list)*df_new.loc[i, 'Close']
+            df_new.loc[i, 'Loss'] = sell_price
+            rown = put_consol(txt_con, rown, f'Покупка: {sum(buy_list):.3f}'
+                                             f' Продажа: {sell_price:.3f}'
+                                             f' Потеря: {sell_price - sum(buy_list):.3f}')
+            txt_con.tag_add('loss', rown-1, f'{int(rown-1)}.end')
+            rown = put_consol(txt_con, rown, f'')
+                
+            total_buy.append(sum(buy_list))
+            total_sell.append(sell_price)
+                
+            comm = sell_price*float(cmb_comm.get())/100
+            df_new.loc[i, 'Comm'] = comm
+            total_comm.append(comm)
+                
+            count_buy = count_buy + len(amount_list)
+            count_sell = count_sell + 1
+            order_list = []
+            amount_list = []
+            buy_list = []
+            order_n = 0
+            last_close = 0"""
                 
         # перезапуск алгоритма по таймеру
         if len(order_list) == int(cmb_count.get()):
@@ -401,6 +450,10 @@ def simulate_MG(df, rown):
         rown = put_consol(txt_con, rown, f'Покупка: {sum(buy_list):.3f}'
                                          f' Продажа: {sell_price:.3f}'
                                          f' Профит: {sell_price - sum(buy_list):.3f}')
+        if sell_price - sum(buy_list) >= 0:
+            txt_con.tag_add('profit', rown-1, f'{int(rown-1)}.end')
+        else:
+            txt_con.tag_add('loss', rown-1, f'{int(rown-1)}.end')
         rown = put_consol(txt_con, rown, f'')
         
         total_buy.append(sum(buy_list))
@@ -409,7 +462,10 @@ def simulate_MG(df, rown):
         comm = sell_price*float(cmb_comm.get())/100
         df_new.loc[i, 'Comm'] = comm
         total_comm.append(comm)
+        count_buy = count_buy + len(amount_list)
+        count_sell = count_sell + 1
     
+    rown = put_consol(txt_con, rown, f'Количество покупок: {count_buy} Количество продаж: {count_sell}')
     rown = put_consol(txt_con, rown, f'Сумма покупок: {sum(total_buy):.3f} Сумма продаж: {sum(total_sell):.3f} Комиссия: {sum(total_comm):.3f}')
     rown = put_consol(txt_con, rown, f'Результат: {sum(total_sell) - sum(total_buy) - sum(total_comm):.3f}')
     rown = put_consol(txt_con, rown, f'Суммарный депозит: {cap_sum:.2f} (профит {(sum(total_sell) - sum(total_buy) - sum(total_comm))/cap_sum*100:.1f}%)')
@@ -518,7 +574,7 @@ def simulate_SMA(df, rown, __low, __high):
 
 # Инициализация окна
 wnd = tk.Tk()
-wnd.geometry('815x650')
+wnd.geometry('815x680')
 
 loc = os.path.realpath(os.path.join(os.getcwd(), 
                        os.path.dirname(__file__)))
@@ -642,14 +698,14 @@ cmb_count.current(2)
 
 lbl_mart = tk.Label(frm_par, text='Matringale, %:')
 lbl_mart.grid(row=3, column=2, sticky=E, pady=4, padx=5)
-__mart = [5, 7, 10, 15]
+__mart = [5, 7, 10, 15, 20, 25]
 cmb_mart = ttk.Combobox(frm_par, values=__mart, state='readonly')
 cmb_mart.grid(row=3, column=3, sticky=W, pady=4, padx=5)
 cmb_mart.current(3)
 
 lbl_prof = tk.Label(frm_par, text='TakeProfit, %:')
 lbl_prof.grid(row=3, column=4, sticky=E, pady=4, padx=5)
-__prof = [0.7, 1, 2, 3]
+__prof = [0.7, 1, 2, 3, 5]
 cmb_prof = ttk.Combobox(frm_par, values=__prof, state='readonly')
 cmb_prof.grid(row=3, column=5, sticky=W, pady=4, padx=5)
 cmb_prof.current(1)
@@ -676,13 +732,21 @@ cmb_rest = ttk.Combobox(frm_par, values=__rest, state='readonly')
 cmb_rest.grid(row=4, column=5, sticky=W, pady=4, padx=5)
 cmb_rest.current(0)
 
-# строка 5 - кнопки
+# строка 5 - настройки
+lbl_trail = tk.Label(frm_par, text='TrailingStop, %:')
+lbl_trail.grid(row=5, column=0, sticky=E, pady=4, padx=5)
+__trail = [0, 0.1, 0.3, 0.5, 1]
+cmb_trail = ttk.Combobox(frm_par, values=__trail, state='readonly')
+cmb_trail.grid(row=5, column=1, sticky=W, pady=4, padx=5)
+cmb_trail.current(1)
+
+# строка 6 - кнопки
 btn_analize = tk.Button(frm_par, text ="Анализ", height = 1, width = 10, command = lambda: analize())
-btn_analize.grid(row=5, column=0, sticky=W, pady=4, padx=5)
+btn_analize.grid(row=6, column=0, sticky=W, pady=4, padx=5)
 btn_yload = tk.Button(frm_par, text ="Симуляция", height = 1, width = 10, command = lambda: __bYload())
-btn_yload.grid(row=5, column=1, sticky=W, pady=4, padx=5)
+btn_yload.grid(row=6, column=1, sticky=W, pady=4, padx=5)
 btn_graf = tk.Button(frm_par, text ="График", height = 1, width = 10, command = lambda: mplot())
-btn_graf.grid(row=5, column=2, sticky=W, pady=4)
+btn_graf.grid(row=6, column=2, sticky=W, pady=4)
 
 # блок 3 - консоль
 # Консольный вывод
