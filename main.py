@@ -531,7 +531,7 @@ def simulate_SMA(df, rown, __val):
     for i in range(int(cmb_count.get())):
         price = float(entr_price.get()) + float(entr_price.get())*i*float(cmb_mart.get())/100
         cap_sum = cap_sum + price
-        #print(i, cap_sum)
+        #print(i, price, cap_sum)
     
     start_date = None
     cycle_n = 0
@@ -576,7 +576,7 @@ def simulate_SMA(df, rown, __val):
             start_price = df_new.loc[i, 'Close']
             start_date = parse(df_new.loc[i, 'Datetime'])
             rown = put_consol(txt_con, rown, f'# цикла: {cycle_n} '
-                                             f'цена: {float(entr_price.get()):.0f}+{n_order*float(cmb_mart.get()):.0f}% ' 
+                                             f'этап {n_order+1:.0f} ' 
                                              f'старт в: {start_date.strftime("%d.%m.%Y %H:%M:%S")}')
             
             x_in.append(i)
